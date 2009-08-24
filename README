@@ -1,0 +1,7 @@
+
+./build1.sh
+./shader test.BMP
+
+Use mouse wheel to adjust light height
+
+#TEST
