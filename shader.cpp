@@ -1,21 +1,29 @@
 #include <iostream>
 #include <cmath>
+#include <ctime>
 #include <SDL/SDL.h>
 #include "vector.h";
 
-#define CAP_TO_1(x) (fabs(x)<1?fabs(x):1.0)
+
+#define CAP_TO_1(x) (x<1?x:1.0)
 
 bool redraw;
 
 // Screen coordinate boundaries
-const int LENGTH = 512;
-const int HEIGHT = 512;
+const int LENGTH = 500;
+const int HEIGHT = 400;
+
+const double SCALE = 100.0;
+
+const double K = 1;
+
 
 // World coordinate boundaries
-double X1 = -1.0;
-double X2 = 1.0;
-double Y1 = -1.0;
-double Y2 = 1.0;
+double X1 = -LENGTH/SCALE;
+double X2 = LENGTH/SCALE;
+double Y1 = -HEIGHT/SCALE;
+double Y2 = HEIGHT/SCALE;
+
 
 
 struct point
@@ -38,7 +46,7 @@ std::ostream& operator<<(std::ostream& out, const point& p)
 
 struct light_source
 {
-  light_source() : loc(vector(0,0,3)), b(1)  {}
+  light_source() : loc(vector(0,0,500/SCALE)), b(1000/SCALE)  {}
   light_source(vector nloc, double nb) : loc(nloc), b(nb) {}
 
   vector loc; // location
@@ -46,11 +54,19 @@ struct light_source
 };
 
 
+
+
 // World coordinate map
 vector world_coord_map[LENGTH][HEIGHT];
  
 // Primary Height map
-double map[LENGTH][HEIGHT];
+// It is double sized so that the previous values can be used in time based iteration
+double z[2][LENGTH][HEIGHT];
+double (*map)[HEIGHT] = z[0];
+double (*old_map)[HEIGHT] = z[1];
+
+// To switch between the above 2
+int change = 0;
 
 // Normal Map
 vector n_map[LENGTH][HEIGHT];
@@ -62,10 +78,10 @@ double shade_map[LENGTH][HEIGHT];
 bool do_input(point& p_mouse, light_source &light);
 void render_array(double map[LENGTH][HEIGHT]);
 void render_array(vector map[LENGTH][HEIGHT]);
-void normalize(vector map[LENGTH][HEIGHT]);
 void shade(light_source light);
 void init_height_map();
 void init_height_map_from_bmp(char* map);
+void apply_waves_to_height_map();
 double f(point p);
 SDL_Color getColor(Uint32 pix, SDL_PixelFormat *fmt);
 Uint32 getpixel(SDL_Surface *surface, int x, int y);
@@ -83,6 +99,8 @@ point to_world(point p) {
 #undef main() //for mingw32
 int main(int argc, char* argv[])
 { 
+  clock_t time = clock();
+
   point p_mouse;
   light_source light;
   if (SDL_Init(SDL_INIT_VIDEO) != 0)
@@ -103,9 +121,17 @@ int main(int argc, char* argv[])
   //MAIN RENDER/INPUT LOOP
   while (do_input(p_mouse, light))
     {
+      redraw = true;
       if (redraw)
         {
 	  // Rerender
+	  
+	  // These two functions are to simulate an animated height map
+	  // rendering loop
+	  //	  apply_waves_to_height_map();
+	  init_height_map();
+	  height_to_normal_map();
+
 	  shade(light);
 	  
 	  // Draw to screen
@@ -220,11 +246,17 @@ void init_height_map()
 {
   int i, j;
   point p;
+  double temp;
   for (i=0; i<LENGTH; i++)
     for (j=0; j<HEIGHT; j++) {
       p = to_world(point(i,j));
       world_coord_map[i][j] = vector(p.x, p.y, 0);
-      map[i][j] = f(p);
+      temp = f(p);
+      // Set boundaries to 0, for sanity
+      //      if (i==0 || j==0 || i==(LENGTH-1) || j==(HEIGHT-1))
+      //	  temp = 0;
+      map[i][j] = temp;
+      old_map[i][j] = temp;
     }
 }
 
@@ -232,7 +264,13 @@ void init_height_map()
 double f(point p)
 {
   double s = 2.0;  //scale factor
-  return 0.5/(1+s*p.x*p.x) + 0.5/(1+s*p.y*p.y);
+  //  return 0.5/(1+s*p.x*p.x) + 0.5/(1+s*p.y*p.y);
+  //  if (sqrt(pow(p.x, 2) + pow(p.y, 2)) < .01)
+  //    return 0.8;
+  //  else
+  //    return 0.0;
+  return 0.1*cos(p.x*p.y + (float)clock()/CLOCKS_PER_SEC)*(pow(p.x,2)-pow(p.y,2));
+
 }
 
 // Here is where the magick happens
@@ -254,6 +292,27 @@ void height_to_normal_map()
 
 }
 
+void apply_waves_to_height_map()
+{
+  int i,j;
+  map = z[change];  
+  change = (change+1) % 2;
+  old_map = z[change];
+  for (i=1; i<LENGTH-1; i++)
+    for(j=1;j<HEIGHT-1; j++)
+      {
+	//	old_map[i][j] = .999*(map[i-1][j] + map[i+1][j] + map[i][j-1] + map[i][j+1])/2
+	//	                 - old_map[i][j];
+	//	old_map[i][j] = .99*(4*map[i][j]*(1-K) - 2*old_map[i][j] + 
+	//		  K * (map[i-1][j] + map[i+1][j] +
+	old_map[i][j] = .9999999*(-2*old_map[i][j] + 
+			     map[i-1][j] + map[i+1][j] +
+			      map[i][j-1] + map[i][j+1])/2;
+	//	if (old_map[i][j] < 0)
+	//	  old_map[i][j] = 0;
+      }
+}
+
 void shade(light_source light)
 {
   int i,j;
@@ -271,11 +330,11 @@ void render_array(double map[LENGTH][HEIGHT])
 {
   SDL_Surface* dest = SDL_GetVideoSurface();
   int i, j; 
-  for (i = 0; i < HEIGHT; i++)
-    for (j = 0; j < LENGTH; j++)
+  for (i = 0; i < LENGTH; i++)
+    for (j = 0; j < HEIGHT; j++)
       {
         SDL_Rect pix = {i, j, 1, 1};
-        int darkness = CAP_TO_1(map[i][j]) * 0xff;
+        int darkness = CAP_TO_1(fabs(map[i][j])) * 0xff;
         SDL_FillRect(dest, &pix,
           SDL_MapRGB(dest->format, darkness, darkness, darkness));
       }
@@ -286,8 +345,8 @@ void render_array(vector n_map[LENGTH][HEIGHT])
 {
   SDL_Surface* dest = SDL_GetVideoSurface();
   int i, j;
-  for (i = 0; i < HEIGHT; i++)
-    for (j = 0; j < LENGTH; j++)
+  for (i = 0; i < LENGTH; i++)
+    for (j = 0; j < HEIGHT; j++)
       {
         SDL_Rect pix = {i, j, 1, 1};
         vector v = (n_map[i][j] + vector(1,1,0))*128.0;
@@ -298,10 +357,6 @@ void render_array(vector n_map[LENGTH][HEIGHT])
   return;
 }
 
-void normalize(vector map[LENGTH][HEIGHT])
-{
-  
-}
  
 bool do_input(point& p_mouse, light_source &light)
 {
@@ -320,6 +375,7 @@ bool do_input(point& p_mouse, light_source &light)
 	  light.loc.x = p_mouse.x;
 	  light.loc.y = p_mouse.y;
 	  redraw = true;
+	  //	  	  std::cout << map[x][y] << std::endl;
 	}	
 
       if (d.type == SDL_MOUSEBUTTONDOWN)
@@ -334,7 +390,8 @@ bool do_input(point& p_mouse, light_source &light)
 	      light.loc.z += .2;
 	      break;
 	    }
-	  std::cout << "Light location changed to: " << light.loc << std::endl;
+	  //std::cout << "Light location changed to: " << light.loc << std::endl;
+
 	}
 
       if (d.type == SDL_KEYDOWN)
